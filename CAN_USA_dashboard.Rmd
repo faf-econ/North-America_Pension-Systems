@@ -1,0 +1,867 @@
+---
+title: "Pension Systems in North America"
+author: Fernando A. Falbo
+output: 
+  flexdashboard::flex_dashboard:
+    social: menu
+    source_code: https://github.com/faf-econ/North-America_Pension-Systems
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+
+# Libraries ----
+
+library(flexdashboard)
+library(shiny)
+library(shinyWidgets)
+library(tidyverse)
+library(readxl)
+library(scales)
+library(DT)
+library(fontawesome)
+library(leaflet)
+library(tidygeocoder)
+library(plotly)
+library(ggthemes)
+library(RColorBrewer)
+library(treemapify) 
+
+
+# Data ----
+
+plans <- read_excel("./Pension_Systems_USA.CAN.xlsx",
+                   skip = 2,
+                   sheet = "Plans")
+
+net_pension_liability <- read_excel("./Pension_Systems_USA.CAN.xlsx",
+                                    skip = 2,
+                                    sheet = "1") 
+
+discount_rate <- read_excel("./Pension_Systems_USA.CAN.xlsx",
+                                    skip = 2,
+                                    sheet = "2") 
+
+demographics <- read_excel("./Pension_Systems_USA.CAN.xlsx",
+                            skip = 2,
+                            sheet = "11") %>%
+  spread(A, value) %>%
+  mutate(value = active/ann)
+  
+net_assets <- read_excel("./Pension_Systems_USA.CAN.xlsx",
+                            skip = 2,
+                            sheet = "3") 
+
+return <- read_excel("./Pension_Systems_USA.CAN.xlsx",
+                         skip = 2,
+                         sheet = "9") 
+
+alloc <- read_excel("./Pension_Systems_USA.CAN.xlsx",
+                         skip = 2,
+                         sheet = "7") %>%
+  select(country, plan, A, year, value) %>%
+  filter(A != "ex") %>%
+  group_by(country, plan, A, year) %>%
+  summarise(value = sum(value, na.rm = TRUE)) %>%
+  group_by(country, plan, year) %>%
+  mutate(total = sum(value),
+         value2 = value/total) %>%
+  select(-value, - total) %>%
+  rename(actual = value2) %>%
+  left_join(read_excel("./Pension_Systems_USA.CAN.xlsx", skip = 2, sheet = "8") %>%
+  select(country, plan, A, year, value) %>%
+  group_by(country, plan, A, year) %>%
+  summarise(value = sum(value, na.rm = TRUE)) %>%
+  group_by(country, plan, year) %>%
+  mutate(total = sum(value),
+         value2 = value/total) %>%
+  select(-value, - total) %>%
+  rename(target = value2)
+  ) %>%
+  left_join(read_excel("./Pension_Systems_USA.CAN.xlsx", range = "Q3:R10", sheet = "Index", col_names = FALSE),
+            by = c("A" = "...1")) %>%
+  mutate(A = ...2) %>%
+  select(-...2)
+
+ 
+
+# Additional ----
+
+nb.cols <- 35
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+```
+
+About {data-navmenu="Overview"}
+=========================================
+
+### About the project
+
+This dashboard is part of a research project at New York University. The complete dataset is available at [NYU libraries](http://scrc.scrc.nyu.edu/scrc/?page_id=3997) and comprises eleven years of historical data (2008 through 2018) for the 25 largest U.S. public pension plans and the ten largest Canadian public pension plans. The Canada dataset includes Canada Pension Plan and excludes pension plans in the province of Quebec. The U.S. dataset was used in Clive Lipshitz and Ingo Walter, "Bridging Public Pension Funds and Infrastructure Investing" (2019). The U.S. and Canada datasets were used in Lipshitz and Walter, "Public Pension Reform and the 49th Parallel: Lessons from Canada for the U.S." (2020). Almost all data was sourced from annual reports of the pension plans. Data includes: (1) Net pension liability (Liabilities, Funded status), (2) Discount rate, (3) Fiduciary net position (Plan assets – detailed by type), (4) Changes in financial position (Contributions, Benefits, Investment income – each detailed by type); (5) Contributions  (Employers, Plan members, rates), (6) Investment expenses (Investing, Administrative – by type), (7) Asset allocation, Actual – by asset class, (8) Asset allocation, Target – by asset class, (9) Investment performance – total, by asset class, (10) Macroeconomic data (Inflation assumptions), (11) Pension plan demographics (active, annuitant, deferred members). In aggregate the dataset comprises 15,487 observations including 6,425 in the Canada dataset and 9,062 in the U.S. dataset (additional data, not in this dataset, was used in the two papers noted above). The dataset was developed in stages between January 2018 and June 2020, primarily by Fernando Falbo, as well as by Patricio Cox and Lebogang Mahlare, under the guidance of Lipshitz and Walter. 
+
+```{r}
+```
+
+Map {data-orientation=columns data-navmenu="Overview"}
+=====================================
+
+Column
+-----------------------------------------------------------------------
+
+### Map of plans across Canada and the U.S.
+
+```{r}
+
+# m <- plans %>%
+#   filter(country == "CAN") 
+#   
+# can_map <- geo(street = m$address, country = rep("Canada", 10), method = "osm") %>%
+#   bind_cols(select(m, acronym))
+# 
+# m <- plans %>%
+#   filter(country == "USA") %>%
+#   separate(address, into = c("street", "city"), sep = ",")
+#   
+# usa_map <- geo(street = m$street, city = m$city, state = m$state, country = rep("United States", 25), method = "cascade") %>%
+#   bind_cols(select(m, acronym))
+# 
+# all_map <- can_map %>%
+#   bind_rows(usa_map) %>%
+#   select(country, acronym, lat, long) %>%
+#   rename(plan = acronym)
+# 
+# saveRDS(all_map, "all_map.RDS")
+
+all_map <- readRDS("./all_map.RDS") 
+
+all_map <- all_map %>%
+  left_join(net_assets %>%
+              filter(year == 2018, A == "assets", B == "net", is.na(C)) %>%
+              select(plan, value)
+            )
+
+factpal <- colorFactor(topo.colors(2), all_map$country)
+
+  renderLeaflet({
+   
+  leaflet(all_map) %>%
+    setView(lng = -91.0589, lat = 45.3601, zoom = 3) %>%
+    addTiles() %>%
+    addCircles(lng = ~long, lat = ~lat, weight = 1,
+      radius = ~value*1000, popup = ~plan, color = ~factpal(country)
+    ) 
+
+})
+
+```
+
+Column
+-----------------------------------------------------------------------
+
+### Plans in 2018
+
+```{r}
+
+datatable(select(plans, -state,-address) %>%
+            left_join(net_assets %>%
+                        filter(year == 2018, A == "assets", B == "net", is.na(C)) %>%
+                        select(plan, value),
+                      by = c("acronym" = "plan")) %>%
+            setNames(c("Country", "Plan", "Plan Name", "Jurisdiction", "Fiscal Year End", "Net Assets (local currency $ billion)")) %>%
+            mutate(Country = ifelse(Country == "CAN", "Canada", "United States")), 
+          options = list(bPaginate = FALSE)
+          )
+  
+```
+
+Plans {data-orientation=rows} 
+=====================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Select Plan and year
+
+```{r}
+
+inputPanel(
+  
+  selectInput("plan", 
+            "Plan:",
+            choices = plans$acronym
+            ),
+
+  sliderInput("year", 
+              "Year:",
+              min = 2008,
+              max = 2018,
+              value = 2018,
+              sep = ""
+              )
+
+)
+
+```
+
+
+Row
+-----------------------------------------------------------------------
+
+### Plan
+
+```{r}
+
+renderValueBox({
+  
+  plan. <- plans %>%
+  filter(acronym == input$plan) %>%
+  select(name) %>%
+  str_replace(pattern = plans %>%
+                filter(acronym == input$plan) %>%
+                .$jurisdiction, 
+              replacement = "") %>%
+  str_trim(side = "both")
+
+
+  valueBox(
+    value = plan.,
+    color = "info",
+    icon = "fa-users"
+  )
+})
+
+```
+
+Row
+-----------------------------------------------------------------------
+
+### Acronym
+
+```{r}
+
+renderValueBox({
+  
+  plan. <- plans %>%
+    filter(acronym == input$plan) %>%
+    select(acronym) 
+  
+  valueBox(
+    value = plan.
+  )
+})
+
+```
+
+### Country
+
+```{r}
+
+renderValueBox({
+  
+  plan. <- plans %>%
+    filter(acronym == input$plan) %>%
+    select(country) %>%
+    mutate(country = ifelse(country == "CAN", "Canada", "United States"))
+  
+  valueBox(
+    value = plan.,
+    icon = "fa-flag"
+  )
+})
+
+```
+
+### Jurisdiction
+
+```{r}
+
+renderValueBox({
+  
+  plan. <- plans %>%
+    filter(acronym == input$plan) %>%
+    select(jurisdiction) 
+  
+  valueBox(
+    value = plan.,
+    icon = "fa-map-marked"
+  )
+})
+
+```
+
+### Fiscal Year End
+
+```{r}
+
+renderValueBox({
+  
+  plan. <- plans %>%
+    filter(acronym == input$plan) %>%
+    select(`fiscal year end`) 
+  
+  valueBox(
+    value = plan.,
+    icon = "fa-calendar"
+  )
+})
+
+```
+
+Row 
+-----------------------------------------------------------------------
+
+### Net Assets (Local currency, billion)
+
+```{r}
+
+renderValueBox({
+  
+  plan. <- net_assets %>%
+    filter(plan == input$plan, A == "assets", B == "net", is.na(C), year == input$year) %>%
+    select(value) %>%
+    .$value %>%
+    round(., 1)
+ 
+
+  valueBox(
+    value = plan.,
+    color = "info",
+    icon = "fa-dollar-sign"
+  )
+})
+
+```
+
+### Investment Performance
+
+```{r}
+
+renderValueBox({
+  
+  plan. <- return %>%
+    filter(plan == input$plan, A == "tot", year == input$year) %>%
+    select(value) %>%
+    .$value %>%
+    round(., 2)
+
+
+  valueBox(
+    value = plan.,
+    color = "info",
+    icon = "fa-percentage"
+  )
+})
+
+```
+
+
+Row 
+-----------------------------------------------------------------------
+
+### Funded Ratio
+
+```{r}
+
+renderGauge({
+  
+  funded_ratio <- net_pension_liability %>%
+    filter(plan == input$plan, 
+           A == "funded" & B == "ratio",
+           year == input$year) %>%
+    select(value) %>%
+    .$value %>%
+    round(., 1)
+    
+  gauge(funded_ratio,
+        min = 0, max = 150, symbol = '%',
+        gaugeSectors(success = c(100, 150), warning = c(80, 99), danger = c(0, 79)
+                     )
+        )
+})
+
+```
+
+### Discount Rate 
+
+```{r}
+
+renderGauge({
+  
+  discount.rate <- discount_rate %>%
+    filter(plan == input$plan, 
+           A == "ndr",
+           year == input$year) %>%
+    select(value) %>%
+    .$value %>%
+    round(., 2)
+  
+    gauge(discount.rate,
+        min = 0, max = 8.5, symbol = '%',
+        gaugeSectors(success = c(0, 6), warning = c(6.01, 7), danger = c(7.01, 8.5)
+                     )
+        )
+
+})
+
+```
+
+### Active/Annuitant Ratio
+
+```{r}
+
+renderGauge({
+  
+  active.annuitant <- demographics %>%
+    filter(plan == input$plan,
+           year == input$year) %>%
+    select(value) %>%
+    .$value %>%
+    round(., 2)
+  
+    gauge(active.annuitant,
+        min = 0, max = 3.1, symbol = '',
+        gaugeSectors(success = c(2, 3.1), warning = c(1.51, 1.99), danger = c(0, 1.5)
+                     )
+        )
+
+})
+
+```
+
+Funded Ratio {data-orientation=rows data-navmenu="Metrics"} 
+=====================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Funded Ratio
+#### Select Plan, chart and years
+
+```{r}
+
+inputPanel(
+
+  selectInput("fr.chart",
+              "Type of chart:",
+              choices = c("Point", "Boxplot", "Line")
+              ),
+  
+  pickerInput("fr.plan",
+              "Plan:", 
+              choices = plans$acronym, 
+              options = list(`actions-box` = TRUE),
+              multiple = TRUE,
+              selected = "ABLAPP"),
+  
+  sliderInput("fr.year", 
+              "Year:",
+              min = 2008,
+              max = 2018,
+              value = c(2008, 2018),
+              sep = ""
+              )
+
+)
+
+```
+
+
+Row {data-height=1000 .tabset}
+-----------------------------------------------------------------------
+
+### Chart
+
+```{r}
+
+fr <- reactive({
+  
+  net_pension_liability %>%
+      filter(plan %in% input$fr.plan,
+             year %in% input$fr.year[1]:input$fr.year[2],
+             A == "funded" & B == "ratio")
+
+})
+
+renderPlotly({
+  
+  fr.f <- fr()
+  
+  fr.f_chart <- fr.f %>%
+    ggplot(aes(x = year, y = value)) +
+    #Axis
+    scale_x_continuous(name = "Year", breaks = c(seq(min(fr.f$year), max(fr.f$year), 1))) +
+    scale_y_continuous(name = "Funded Ratio %", labels = number_format(1, suffix = "%")) +
+    #Design
+    scale_color_gdocs() +
+    theme(legend.position = "bottom")
+
+  if(input$fr.chart == "Point") {
+    
+    fr.f_chart <- fr.f_chart +
+      geom_point(size = 1, alpha = .5, aes(color = country, label = plan)) +
+      coord_flip()
+      
+  } else if(input$fr.chart == "Boxplot"){
+    
+    fr.f_chart <- fr.f_chart +
+      geom_boxplot(alpha = .5, aes(color = country)) 
+    
+  }else {
+
+    fr.f_chart <- fr.f_chart +
+      geom_line(size = 1, alpha = .5, aes(color = plan)) +
+      facet_wrap(country~.) +
+      scale_color_manual(values = mycolors)
+    
+    }
+  
+  fr.f_chart %>%
+    ggplotly() %>%
+      layout(legend = list(orientation = "h", x = 0.4, y = -.2))
+
+})
+
+```
+
+### Table
+
+```{r}
+
+renderDataTable({
+  
+  datatable(fr() %>% 
+              select(country, plan, year, value),
+            options = list(scrollY = "500px",
+                           bPaginate = FALSE),
+            filter = "top"
+            )
+
+})
+  
+```
+
+Discount Rate {data-orientation=rows data-navmenu="Metrics"} 
+=====================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Discount Rate
+#### Select Plan, chart and years
+
+```{r}
+
+inputPanel(
+
+  selectInput("dr.chart",
+              "Type of chart:",
+              choices = c("Point", "Boxplot", "Line")
+              ),
+  
+  pickerInput("dr.plan",
+              "Plan:", 
+              choices = plans$acronym, 
+              options = list(`actions-box` = TRUE),
+              multiple = TRUE,
+              selected = "ABLAPP"),
+  
+  sliderInput("dr.year", 
+              "Year:",
+              min = 2008,
+              max = 2018,
+              value = c(2008, 2018),
+              sep = ""
+              )
+
+)
+
+```
+
+
+Row {data-height=1000 .tabset}
+-----------------------------------------------------------------------
+
+### Chart
+
+```{r}
+
+dr <- reactive({
+
+  discount_rate %>%
+      filter(plan %in% input$dr.plan,
+             year %in% input$dr.year[1]:input$dr.year[2],
+             A == "ndr")
+
+})
+
+renderPlotly({
+  
+  dr.f <- dr()
+  
+  dr.f_chart <- dr.f %>%
+    ggplot(aes(x = year, y = value)) +
+    #Axis
+    scale_x_continuous(name = "Year", breaks = c(seq(min(dr.f$year), max(dr.f$year), 1))) +
+    scale_y_continuous(name = "Discount Rate %", labels = number_format(.1, suffix = "%")) +
+    #Design
+    scale_color_gdocs() +
+    theme(legend.position = "bottom")
+
+  if(input$dr.chart == "Point") {
+    
+    dr.f_chart <- dr.f_chart +
+      geom_point(size = 1, alpha = .5, aes(color = country, label = plan)) +
+      coord_flip()
+      
+  } else if(input$dr.chart == "Boxplot"){
+    
+    dr.f_chart <- dr.f_chart +
+      geom_boxplot(alpha = .5, aes(color = country)) 
+    
+  }else {
+
+    dr.f_chart <- dr.f_chart +
+      geom_line(size = 1, alpha = .5, aes(color = plan)) +
+      facet_wrap(country~.) +
+      scale_color_manual(values = mycolors)
+    
+    }
+  
+  dr.f_chart %>%
+    ggplotly() %>%
+      layout(legend = list(orientation = "h", x = 0.4, y = -.2))
+
+})
+
+```
+
+### Table
+
+```{r}
+
+renderDataTable({
+  
+  datatable(dr() %>% 
+              select(country, plan, year, value),
+            options = list(scrollY = "500px",
+                           bPaginate = FALSE),
+            filter = "top"
+            )
+
+})
+  
+```
+
+Active/Annuitant ratio {data-orientation=rows data-navmenu="Metrics"} 
+=====================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Active/Annuitant ratio
+#### Select Plan, chart and years
+
+```{r}
+
+inputPanel(
+
+  selectInput("aar.chart",
+              "Type of chart:",
+              choices = c("Point", "Boxplot", "Line")
+              ),
+  
+  pickerInput("aar.plan",
+              "Plan:", 
+              choices = plans$acronym, 
+              options = list(`actions-box` = TRUE),
+              multiple = TRUE,
+              selected = "ABLAPP"),
+  
+  sliderInput("aar.year", 
+              "Year:",
+              min = 2008,
+              max = 2018,
+              value = c(2008, 2018),
+              sep = ""
+              )
+
+)
+
+```
+
+
+Row {data-height=1000 .tabset}
+-----------------------------------------------------------------------
+
+### Chart
+
+```{r}
+
+aar <- reactive({
+  
+  demographics %>%
+      filter(plan %in% input$aar.plan,
+             year %in% input$aar.year[1]:input$aar.year[2]
+             )
+
+})
+
+renderPlotly({
+  
+  aar.f <- aar()
+  
+  aar.f_chart <- aar.f %>%
+    ggplot(aes(x = year, y = value)) +
+    #Axis
+    scale_x_continuous(name = "Year", breaks = c(seq(min(aar.f$year), max(aar.f$year), 1))) +
+    scale_y_continuous(name = "Active/Annuitant Ratio", labels = number_format(.1)) +
+    #Design
+    scale_color_gdocs() +
+    theme(legend.position = "bottom")
+
+  if(input$aar.chart == "Point") {
+    
+    aar.f_chart <- aar.f_chart +
+      geom_point(size = 1, alpha = .5, aes(color = country, label = plan)) +
+      coord_flip()
+      
+  } else if(input$aar.chart == "Boxplot"){
+    
+    aar.f_chart <- aar.f_chart +
+      geom_boxplot(alpha = .5, aes(color = country)) 
+    
+  }else {
+
+    aar.f_chart <- aar.f_chart +
+      geom_line(size = 1, alpha = .5, aes(color = plan)) +
+      facet_wrap(country~.) +
+      scale_color_manual(values = mycolors)
+    
+    }
+  
+  aar.f_chart %>%
+    ggplotly() %>%
+      layout(legend = list(orientation = "h", x = 0.4, y = -.2))
+
+})
+
+```
+
+### Table
+
+```{r}
+
+renderDataTable({
+  
+  datatable(aar() %>% 
+              select(country, plan, year, value),
+            options = list(scrollY = "500px",
+                           bPaginate = FALSE),
+            filter = "top"
+            )
+
+})
+  
+```
+
+Asset Allocation {data-orientation=rows} 
+=====================================
+
+Sidebar {.sidebar}
+-----------------------------------------------------------------------
+
+### Asset Allocation
+#### Select Plan and year
+
+```{r}
+
+inputPanel(
+
+  selectInput("alloc.plan",
+              "Plan:", 
+              choices = plans$acronym,
+              selected = "ABLAPP"),
+  
+  sliderInput("alloc.year", 
+              "Year:",
+              min = 2008,
+              max = 2018,
+              value = 2018,
+              sep = ""
+              )
+
+)
+
+```
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### Actual vs Target Allocation
+
+```{r}
+
+allocation <- reactive({
+  
+  alloc %>%
+    filter(plan == input$alloc.plan,
+           year == input$alloc.year)
+
+})
+
+renderPlotly({
+  
+  # Data
+(allocation() %>%
+  # Chart
+  ggplot(aes(x = A, y = actual)) +
+    #Geoms
+  geom_col(fill = "blue", alpha = .5) +
+  geom_point(aes(y = target), color = "red") +
+   #Axis
+  scale_x_discrete(name = "") +
+  scale_y_continuous(name = "Allocation %", labels = percent_format(1)) +
+    #Design
+  coord_flip() +
+  scale_color_gdocs() 
+ ) %>%
+  ggplotly()
+
+})
+
+```
+
+### Actual Allocation Treemap
+
+```{r}
+
+renderPlot({
+  
+  allocation() %>%
+  ggplot(aes(area = actual, fill = A)) +
+    geom_treemap(alpha = .5) +
+    geom_treemap_text(aes(label = A), colour = "white", place = "centre") +
+    scale_fill_gdocs() +
+    theme(legend.position = "none") 
+
+})
+
+```
+
+### Table
+
+```{r}
+
+renderDataTable({
+  
+  datatable(allocation() %>% 
+              select(country, plan, year, actual, target),
+            options = list(scrollY = "500px",
+                           bPaginate = FALSE),
+            filter = "top"
+            )
+
+})
+  
+```
+
